@@ -17,13 +17,14 @@ SESSION WORKFLOW
 - OPEN: accept requests and votes.
 - NO_REQUESTS: public can browse queue, but cannot add requests or votes. Admin can still reorder, park, mark played.
 - CLOSED: no session active; archive remains in Sheets and in a new Drive folder.
-- In admin, enter a positive integer in Order and click Queue / Move. Smaller numbers play earlier. Set a larger number to move a song later. Order is ignored when status becomes PLYD.
+- In admin, enter a positive whole number in Order and queue the song. Leave Order blank to place it at the end of the queue. Smaller numbers play earlier. Set a larger number to move a song later. Order is cleared when a song leaves the queue.
+- The public page refreshes while it is open. The admin page refreshes too, and waits while an order number is being edited.
 - A song can be requested once per evening. The requester can cancel it while REQU; cancelling makes its existing votes inapplicable. Others may request it again thereafter.
 - All requests/votes are saved immediately in Google Sheets and archived as CSV on Close Session.
 
 SECURITY AND LIMITS
 - This is an initial community-use app, not a security-audited product.
-- Admin actions are protected by a server-side long-password check and an expiring admin token; ?admin=1 alone grants no admin access.
+- Admin actions are protected by a server-side long-password check and an expiring admin token; ?admin=1 alone grants no admin access. Eight wrong passwords in about ten minutes, from the same browser, pause further sign-in attempts.
 - Browser ID / localStorage limits normal double-voting only. Users can deliberately create more identities with other browsers, private mode or cleared data. It does NOT enforce one physical phone, and should not be advertised as such.
 - For stronger voter identity controls, integrate a trusted identity provider or phone verification via a separate service; Apps Script alone does not have physical-device attestation.
 - Every public visitor can read song and artist names and request/queue statuses. No private Playlist columns are shared via the public API.

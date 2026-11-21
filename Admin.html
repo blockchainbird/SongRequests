@@ -1,33 +1,778 @@
-<!DOCTYPE html><html><head><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body{font:16px system-ui,sans-serif;background:#f6f7f9;margin:0;color:#17283b}main{padding:18px;max-width:750px;margin:auto}input{padding:10px;border:1px solid #bbc5cf;border-radius:8px;font:inherit;max-width:100%;box-sizing:border-box}button{border:1px solid #9facbd;border-radius:8px;padding:10px;background:white;font:inherit;cursor:pointer}.primary{background:#17416b;color:white}.card{background:white;border:1px solid #e3e6ea;border-radius:12px;padding:12px;margin:8px 0}.line{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.muted{color:#637181}#msg{color:#943c2b;margin:12px 0}.controls{display:flex;gap:7px;flex-wrap:wrap}.song{font-weight:700}.small{font-size:13px}.order{width:72px}
-</style></head><body><main><h1>🎤 Performance Manager</h1><div id="msg" role="status"></div>
-<div id="login"><p>Enter the long admin password configured in Apps Script.</p><input type="password" id="password" placeholder="Admin password"><button class="primary" onclick="login()">Sign in</button></div>
-<div id="app" hidden><div id="session" class="card"></div><div class="controls"><input id="venue" placeholder="Venue / session name"><button onclick="call('adminStartSession',[document.getElementById('venue').value])">Start Session</button><button onclick="call('adminCloseRequests',[])">Close Requests</button><button onclick="call('adminReopenRequests',[])">Reopen Requests</button><button onclick="closeSession()">Close Session + Archive</button></div><h2>Requests / Queue</h2><p class="muted">Lower Order plays first. Give a favourite song a higher number to move it later. Only you can change Order.</p><div id="requests"></div><button onclick="load()">Refresh</button></div>
-</main><script>
-let token='',state={requests:[],session:null};const msg=document.getElementById('msg');
-function call(name,args,cb){msg.textContent='';google.script.run.withSuccessHandler(cb||load).withFailureHandler(e=>msg.textContent=e.message)[name](token,...args)}
-function login(){google.script.run.withSuccessHandler(t=>{token=t;document.getElementById('password').value='';document.getElementById('login').hidden=true;document.getElementById('app').hidden=false;load()}).withFailureHandler(e=>msg.textContent=e.message).adminLogin(document.getElementById('password').value)}
-function load(){call('adminData',[],d=>{state=d;render()})}
-function closeSession(){if(confirm('Close this performance and save the final CSV archive in Google Drive?'))call('adminCloseSession',[],url=>{msg.textContent='Archive saved: '+url;load()})}
-function elm(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
-function btn(text,func){const b=elm('button',text);b.onclick=func;return b}
-function render(){const s=state.session;document.getElementById('session').textContent=s?s.venue+' — '+s.state+' — '+s.id:'No session open. Enter a venue and press Start Session.';
- const area=document.getElementById('requests');area.replaceChildren();
- const items=[...state.requests].sort((a,b)=>{
- const rank={QUED:0,REQU:1,PARK:2,PLYD:3,CANC:4};return (rank[a.status]??5)-(rank[b.status]??5)||((a.order||99999)-(b.order||99999))||b.votes-a.votes});
- items.forEach(r=>{
- const box=elm('div',undefined,'card'),line=elm('div',undefined,'line'),info=elm('div');
- info.append(elm('div',r.song,'song'),elm('div',r.artist+' · 👍 '+r.votes+' · '+r.status,'muted small'));line.append(info);
- const controls=elm('div',undefined,'controls'),ord=elm('input');ord.type='number';ord.min='1';ord.max='9999';ord.className='order';ord.value=r.order||'';ord.placeholder='Order';
- controls.append(ord,btn('Queue / Move',()=>call('adminSetRequest',[r.id,'QUED',ord.value])));
- if(r.status!=='CANC'){
-  controls.append(btn('Park',()=>call('adminSetRequest',[r.id,'PARK',0])));
-  controls.append(btn('Played',()=>call('adminSetRequest',[r.id,'PLYD',0])));
-  controls.append(btn('Unqueue',()=>call('adminSetRequest',[r.id,'REQU',0])));
- }
- line.append(controls);box.append(line);area.append(box);
- });
-}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="theme-color" content="#f3efe6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#12141a" media="(prefers-color-scheme: dark)">
+  <title>Performance manager</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3efe6;
+      --bg-sticky: rgba(243, 239, 230, .94);
+      --card: #fffdf8;
+      --text: #211c16;
+      --muted: #5e564c;
+      --placeholder: #7a7166;
+      --line: #e3d9c8;
+      --line-strong: #cfc3ae;
+      --field: #fff;
+      --accent: #9a3412;
+      --accent-ink: #fff8f3;
+      --chip: #efe7da;
+      --good: #0f6a43;
+      --good-bg: #e4f5ec;
+      --warn: #8a4b08;
+      --warn-bg: #fff1d6;
+      --bad: #9f2d2d;
+      --bad-bg: #fde8e4;
+      --info: #1d4f91;
+      --info-bg: #e7f0fb;
+      --focus: #9a3412;
+      --shadow: 0 10px 30px rgba(70, 48, 20, .06);
+      --queued: #9a3412;
+      --requested: #1d4f91;
+      --parked: #a16207;
+      --played: #6b645b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #12141a;
+        --bg-sticky: rgba(18, 20, 26, .94);
+        --card: #1c2230;
+        --text: #f4f1ea;
+        --muted: #c5c0b6;
+        --placeholder: #b7ad9f;
+        --line: #2e3545;
+        --line-strong: #465066;
+        --field: #141924;
+        --accent: #ffb020;
+        --accent-ink: #2a1c00;
+        --chip: #2a3142;
+        --good: #8ee0b5;
+        --good-bg: #163528;
+        --warn: #ffd27a;
+        --warn-bg: #3a2c12;
+        --bad: #ffb1a6;
+        --bad-bg: #3f221e;
+        --info: #b9d3ff;
+        --info-bg: #1c2c44;
+        --focus: #ffb020;
+        --shadow: none;
+        --queued: #ffb020;
+        --requested: #9ec1ff;
+        --parked: #ffd27a;
+        --played: #b0a89c;
+      }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .55; }
+    .wrap { max-width: 44rem; margin: 0 auto; padding: 0 16px calc(28px + env(safe-area-inset-bottom)); }
+    .top {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--bg-sticky);
+      border-bottom: 1px solid var(--line);
+      padding-top: calc(14px + env(safe-area-inset-top));
+      margin-bottom: 14px;
+    }
+    .head { padding-bottom: 12px; }
+    h1, h2 { font-family: Georgia, "Iowan Old Style", Palatino, serif; font-weight: 600; letter-spacing: -0.02em; }
+    h1 { margin: 0; font-size: 1.7rem; line-height: 1.15; overflow-wrap: anywhere; }
+    h2 { margin: 0 0 4px; font-size: 1.15rem; }
+    .title-row, .title-actions, .actions, .order-row, .meta-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .title-row { justify-content: space-between; }
+    .muted, .hint { color: var(--muted); }
+    label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 14px; }
+    input[type="text"], input[type="password"], input[type="number"] {
+      width: 100%;
+      min-height: 48px;
+      padding: 12px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: var(--field);
+      color: var(--text);
+      font-size: 16px;
+    }
+    .password-row { position: relative; }
+    .password-row input { padding-right: 76px; }
+    .password-row .ghost {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      min-height: 36px;
+    }
+    ::placeholder { color: var(--placeholder); opacity: 1; }
+    button.primary, button.secondary, button.danger, button.ghost {
+      min-height: 44px;
+      border-radius: 12px;
+      padding: 10px 14px;
+    }
+    .primary { background: var(--accent); color: var(--accent-ink); border: 1px solid transparent; }
+    .secondary { background: var(--card); color: var(--text); border: 1px solid var(--line-strong); }
+    .danger { background: var(--bad-bg); color: var(--bad); border: 1px solid transparent; }
+    .ghost { background: var(--card); color: var(--text); border: 1px solid var(--line-strong); }
+    form > .primary, .panel > .actions > .danger { width: 100%; margin-top: 8px; }
+    .panel { margin: 8px 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-left-width: 4px;
+      border-radius: 16px;
+      padding: 14px;
+      margin: 10px 0;
+      box-shadow: var(--shadow);
+    }
+    .card.status-QUED { border-left-color: var(--queued); }
+    .card.status-REQU { border-left-color: var(--requested); }
+    .card.status-PARK { border-left-color: var(--parked); }
+    .card.status-PLYD { border-left-color: var(--played); }
+    .card.status-CANC { border-left-color: var(--bad); }
+    .song { font-weight: 700; font-size: 1.05rem; overflow-wrap: anywhere; }
+    .artist { color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--chip);
+      font-size: 13px;
+    }
+    .order-row { align-items: flex-end; width: 100%; margin-top: 10px; }
+    .order-label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
+    input.order { width: 5.5rem; min-height: 44px; padding-right: 8px; }
+    .order-row .primary, .order-row .secondary { flex: 1; width: auto; margin-top: 0; }
+    .actions { margin-top: 8px; }
+    .card .actions > .primary { width: 100%; }
+    .actions > .secondary { flex: 1 1 10rem; }
+    .block { margin: 18px 0; }
+    .warn { color: var(--warn); margin: 8px 0 0; }
+    .empty, details {
+      border: 1px dashed var(--line-strong);
+      border-radius: 14px;
+      padding: 12px;
+      color: var(--muted);
+    }
+    details { margin-top: 12px; }
+    summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+    #msg, .banner { padding: 10px 12px; border-radius: 12px; margin: 0 0 12px; }
+    #msg { background: var(--bad-bg); color: var(--bad); }
+    .banner.ok { background: var(--good-bg); color: var(--good); }
+    .banner a { color: inherit; }
+    .session { margin: 8px 0 0; }
+    button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
+    body.is-busy .primary, body.is-busy .secondary, body.is-busy .danger { opacity: .55; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap head">
+      <div class="title-row">
+        <h1>Performance manager</h1>
+        <div class="title-actions">
+          <button type="button" id="refreshBtn" class="ghost" hidden>Refresh</button>
+          <button type="button" id="signOut" class="ghost" hidden>Sign out</button>
+        </div>
+      </div>
+      <p id="sessionLine" class="session">Sign in to run the performance.</p>
+      <p id="summaryLine" class="muted"></p>
+      <p id="updated" class="muted"></p>
+    </div>
+  </header>
+  <main class="wrap">
+    <p id="msg" role="alert" hidden></p>
+    <div id="banner" class="banner" hidden></div>
+    <form id="loginForm">
+      <p class="muted">Sign in with the long admin password from setup. Opening this page does not sign you in by itself.</p>
+      <label for="password">Admin password</label>
+      <div class="password-row">
+        <input id="password" type="password" autocomplete="current-password" placeholder="At least 16 characters">
+        <button type="button" id="togglePassword" class="ghost">Show</button>
+      </div>
+      <button type="submit" class="primary" id="loginBtn">Sign in</button>
+    </form>
+    <div id="app" hidden>
+      <form id="startForm" class="panel">
+        <label for="venue">Venue or session name</label>
+        <input id="venue" type="text" maxlength="100" placeholder="Friday at the Blue Room" autocomplete="off">
+        <button type="submit" class="primary">Start session</button>
+      </form>
+      <div id="livePanel" class="panel" hidden>
+        <div class="actions">
+          <button type="button" class="secondary" id="pauseBtn">Stop new requests</button>
+          <button type="button" class="secondary" id="reopenBtn" hidden>Reopen requests</button>
+          <button type="button" class="danger" id="endBtn">End session and archive</button>
+        </div>
+      </div>
+      <p id="orderHint" class="hint" hidden>Lower numbers play first. Leave order blank to put a song at the end. Give songs different numbers when two share one.</p>
+      <div id="requests"></div>
+    </div>
+  </main>
+  <noscript><p class="wrap">The performance manager needs JavaScript enabled.</p></noscript>
+  <script>
+const TOKEN_KEY = 'sr_admin_token';
+const memoryStore = {};
+const sessionStore = {
+  get(key) {
+    if (Object.prototype.hasOwnProperty.call(memoryStore, key)) return memoryStore[key];
+    try { return sessionStorage.getItem(key); } catch (err) { return null; }
+  },
+  set(key, value) {
+    memoryStore[key] = String(value);
+    try { sessionStorage.setItem(key, String(value)); } catch (err) {}
+  },
+  del(key) {
+    delete memoryStore[key];
+    try { sessionStorage.removeItem(key); } catch (err) {}
+  }
+};
+let token = '';
+let state = { session: null, requests: [] };
+let banner = null;
+let busy = false;
+let loadSeq = 0;
+let lastUpdated = null;
+let lastFetchAt = 0;
+let drafts = {};
+let adminReady = false;
+let renderTimer = 0;
+let holdRenderUntil = 0;
+const STATUS = { REQU: 'Requested', QUED: 'In queue', PARK: 'On hold', PLYD: 'Played', CANC: 'Cancelled' };
 
-</script></body></html>
+function hasRpc() {
+  return !!(window.google && google.script && google.script.run);
+}
+function errorText(err) {
+  let text = 'Something went wrong.';
+  if (typeof err === 'string') text = err;
+  else if (err && err.message) text = String(err.message);
+  text = text.replace(/^Error:\s*/i, '');
+  if (text.length > 280) text = text.slice(0, 280);
+  return text || 'Something went wrong.';
+}
+function isAuthError(text) { return /admin login required/i.test(text || ''); }
+function setBusy(value) {
+  busy = !!value;
+  document.body.classList.toggle('is-busy', busy);
+  const refresh = document.getElementById('refreshBtn');
+  const loginBtn = document.getElementById('loginBtn');
+  if (refresh) refresh.textContent = busy ? 'Saving…' : 'Refresh';
+  if (loginBtn && document.getElementById('loginForm') && !document.getElementById('loginForm').hidden) {
+    loginBtn.textContent = busy ? 'Signing in…' : 'Sign in';
+  }
+}
+function paintMsg(text) {
+  const node = document.getElementById('msg');
+  node.textContent = text || '';
+  node.hidden = !text;
+}
+function setBanner(tone, text, href) {
+  banner = text ? { tone: tone || 'ok', text: text, href: href || '' } : null;
+  paintBanner();
+}
+function paintBanner() {
+  const node = document.getElementById('banner');
+  node.replaceChildren();
+  if (!banner) {
+    node.hidden = true;
+    return;
+  }
+  node.hidden = false;
+  node.className = 'banner ' + banner.tone;
+  node.appendChild(document.createTextNode(banner.text + ' '));
+  if (banner.href && /^https:\/\//.test(banner.href)) {
+    const link = document.createElement('a');
+    link.href = banner.href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'Open the archive folder';
+    node.appendChild(link);
+    node.appendChild(document.createTextNode(' '));
+  }
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'ghost';
+  dismiss.textContent = 'Dismiss';
+  dismiss.addEventListener('click', function () { setBanner(null); });
+  node.appendChild(dismiss);
+}
+function clockTime(ms) {
+  if (!ms) return '';
+  const date = new Date(ms);
+  if (isNaN(date.getTime())) return '';
+  try { return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+  catch (err) { return ''; }
+}
+function stamp() {
+  const node = document.getElementById('updated');
+  node.textContent = lastUpdated ? 'Updated ' + clockTime(lastUpdated) : '';
+}
+function statusLabel(row) {
+  if (row.status === 'QUED' && row.order != null) return 'In queue · #' + row.order;
+  if (row.status === 'PLYD') {
+    const time = clockTime(row.playedAt);
+    return time ? 'Played ' + time : 'Played';
+  }
+  return STATUS[row.status] || row.status || 'Unknown';
+}
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+function bySong(a, b) {
+  return String(a.song).localeCompare(String(b.song), undefined, { sensitivity: 'base' })
+    || String(a.artist).localeCompare(String(b.artist), undefined, { sensitivity: 'base' });
+}
+function byQueue(a, b) {
+  const ao = a.order == null ? 99999 : Number(a.order);
+  const bo = b.order == null ? 99999 : Number(b.order);
+  return ao - bo || (b.votes || 0) - (a.votes || 0) || bySong(a, b);
+}
+function duplicateMap(rows) {
+  const counts = {};
+  rows.forEach(function (row) {
+    if (row.status !== 'QUED' || row.order == null) return;
+    const key = String(row.order);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  return counts;
+}
+function parseOrder(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  if (n < 1 || n > 9999) return null;
+  return text;
+}
+function showLogin(focus) {
+  if (renderTimer) {
+    clearInterval(renderTimer);
+    renderTimer = 0;
+  }
+  document.getElementById('app').hidden = true;
+  document.getElementById('loginForm').hidden = false;
+  document.getElementById('refreshBtn').hidden = true;
+  document.getElementById('signOut').hidden = true;
+  document.getElementById('sessionLine').textContent = 'Sign in to run the performance.';
+  document.getElementById('summaryLine').textContent = '';
+  if (focus) document.getElementById('password').focus();
+}
+function showApp() {
+  document.getElementById('loginForm').hidden = true;
+  document.getElementById('app').hidden = false;
+  document.getElementById('refreshBtn').hidden = false;
+  document.getElementById('signOut').hidden = false;
+  if (!adminReady) document.getElementById('sessionLine').textContent = 'Loading the session…';
+}
+function dropSession(text) {
+  token = '';
+  sessionStore.del(TOKEN_KEY);
+    setBusy(false);
+    showLogin(true);
+    paintMsg(text || 'Sign in again.');
+}
+function orderEditing() {
+  const node = document.activeElement;
+  return !!(node && node.classList && node.classList.contains('order'));
+}
+function captureDrafts() {
+  const next = {};
+  document.querySelectorAll('input.order').forEach(function (input) {
+    const serverValue = input.getAttribute('data-server') || '';
+    if (document.activeElement === input || input.value !== serverValue) next[input.getAttribute('data-id')] = input.value;
+  });
+  drafts = next;
+}
+function requestRender() {
+  const wait = orderEditing() || Date.now() < holdRenderUntil;
+  if (!wait) {
+    if (renderTimer) {
+      clearInterval(renderTimer);
+      renderTimer = 0;
+    }
+    render();
+    return;
+  }
+  if (orderEditing()) captureDrafts();
+  if (renderTimer) return;
+  renderTimer = setInterval(function () {
+    if (!orderEditing() && Date.now() >= holdRenderUntil) {
+      clearInterval(renderTimer);
+      renderTimer = 0;
+      render();
+    }
+  }, 200);
+}
+function actButton(label, className, act) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.textContent = label;
+  button.setAttribute('data-act', act);
+  return button;
+}
+function orderControl(row, label) {
+  const wrap = el('div', 'order-row');
+  const field = el('label', 'order-label', 'Order');
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '1';
+  input.max = '9999';
+  input.step = '1';
+  input.inputMode = 'numeric';
+  input.className = 'order';
+  input.placeholder = 'End';
+  input.setAttribute('data-id', row.id);
+  input.setAttribute('data-server', row.order == null ? '' : String(row.order));
+  input.setAttribute('aria-label', 'Playing order for ' + row.song);
+  input.value = Object.prototype.hasOwnProperty.call(drafts, row.id) ? drafts[row.id] : (row.order == null ? '' : String(row.order));
+  field.appendChild(input);
+  wrap.appendChild(field);
+  wrap.appendChild(actButton(label, 'primary', 'queue'));
+  return wrap;
+}
+function card(row, dups) {
+  const box = el('article', 'card status-' + row.status);
+  box.setAttribute('data-id', row.id);
+  const title = el('div', 'song', row.song);
+  title.translate = false;
+  box.appendChild(title);
+  if (row.artist) {
+    const artist = el('div', 'artist', row.artist);
+    artist.translate = false;
+    box.appendChild(artist);
+  }
+  const meta = el('div', 'meta-row');
+  meta.appendChild(el('span', 'chip', statusLabel(row)));
+  meta.appendChild(el('span', 'chip', (row.votes || 0) + ((row.votes || 0) === 1 ? ' vote' : ' votes')));
+  if (row.createdAt) meta.appendChild(el('span', 'chip', 'Asked ' + clockTime(row.createdAt)));
+  box.appendChild(meta);
+  if (row.status === 'QUED' && row.order != null && dups[String(row.order)] > 1) {
+    box.appendChild(el('p', 'warn', 'Another song also has order ' + row.order + '.'));
+  }
+  if (row.status === 'CANC') return box;
+  const actions = el('div', 'actions');
+  if (row.status === 'QUED') {
+    actions.appendChild(actButton('Mark played', 'primary', 'played'));
+    actions.appendChild(orderControl(row, 'Update order'));
+    actions.appendChild(actButton('Park', 'secondary', 'park'));
+    actions.appendChild(actButton('Back to requests', 'secondary', 'requ'));
+  } else if (row.status === 'REQU') {
+    actions.appendChild(orderControl(row, 'Add to queue'));
+    actions.appendChild(actButton('Park', 'secondary', 'park'));
+    actions.appendChild(actButton('Mark played', 'secondary', 'played'));
+  } else if (row.status === 'PARK') {
+    actions.appendChild(orderControl(row, 'Add to queue'));
+    actions.appendChild(actButton('Back to requests', 'secondary', 'requ'));
+    actions.appendChild(actButton('Mark played', 'secondary', 'played'));
+  } else if (row.status === 'PLYD') {
+    actions.appendChild(orderControl(row, 'Queue again'));
+    actions.appendChild(actButton('Back to requests', 'secondary', 'requ'));
+    actions.appendChild(actButton('Park', 'secondary', 'park'));
+  }
+  box.appendChild(actions);
+  return box;
+}
+function section(parent, title, rows, dups) {
+  if (!rows.length) return;
+  const block = el('section', 'block');
+  block.appendChild(el('h2', '', title));
+  rows.forEach(function (row) { block.appendChild(card(row, dups)); });
+  parent.appendChild(block);
+}
+function render() {
+  const session = state.session;
+  const live = !!session;
+  document.getElementById('startForm').hidden = !adminReady || live;
+  document.getElementById('livePanel').hidden = !adminReady || !live;
+  document.getElementById('orderHint').hidden = !adminReady || !live;
+  document.getElementById('pauseBtn').hidden = !live || session.state !== 'OPEN';
+  document.getElementById('reopenBtn').hidden = !live || session.state !== 'NO_REQUESTS';
+  const label = !session ? 'No session open.'
+    : session.state === 'OPEN' ? 'Accepting requests'
+    : session.state === 'NO_REQUESTS' ? 'Requests paused'
+    : session.state;
+  document.getElementById('sessionLine').textContent = session ? session.venue + ' — ' + label : 'No session open. Enter a venue and start when the performance begins.';
+  const rows = state.requests || [];
+  const count = function (status) { return rows.filter(function (row) { return row.status === status; }).length; };
+  const dups = duplicateMap(rows);
+  const shared = Object.keys(dups).some(function (key) { return dups[key] > 1; });
+  document.getElementById('summaryLine').textContent = session
+    ? [count('QUED') + ' in queue', count('REQU') + ' waiting', count('PARK') + ' on hold', count('PLYD') + ' played'].join(' · ') + (shared ? ' · shared order numbers' : '')
+    : '';
+  const area = document.getElementById('requests');
+  area.replaceChildren();
+  if (!session) return;
+  if (!rows.length) {
+    area.appendChild(el('p', 'empty', 'No requests yet. They show up here when the audience sends some.'));
+    return;
+  }
+  section(area, 'In queue', rows.filter(function (row) { return row.status === 'QUED'; }).sort(byQueue), dups);
+  section(area, 'Requested', rows.filter(function (row) { return row.status === 'REQU'; }).sort(function (a, b) { return (b.votes || 0) - (a.votes || 0) || bySong(a, b); }), dups);
+  section(area, 'On hold', rows.filter(function (row) { return row.status === 'PARK'; }).sort(bySong), dups);
+  section(area, 'Played', rows.filter(function (row) { return row.status === 'PLYD'; }).sort(function (a, b) { return (b.playedAt || 0) - (a.playedAt || 0) || bySong(a, b); }), dups);
+  const cancelled = rows.filter(function (row) { return row.status === 'CANC'; }).sort(bySong);
+  if (cancelled.length) {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'Cancelled (' + cancelled.length + ')';
+    details.appendChild(summary);
+    cancelled.forEach(function (row) { details.appendChild(card(row, dups)); });
+    area.appendChild(details);
+  }
+}
+function server(name, args, ok, fail) {
+  if (!hasRpc()) {
+    fail(new Error('Open the published web app link.'));
+    return;
+  }
+  let done = false;
+  const finish = function (fn, value) {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    fn(value);
+  };
+  const timer = setTimeout(function () {
+    finish(fail, new Error('The server took too long. Try again.'));
+  }, 25000);
+  try {
+    const runner = google.script.run
+      .withSuccessHandler(function (value) { finish(ok, value); })
+      .withFailureHandler(function (err) { finish(fail, err); });
+    if (name === 'adminLogin') runner.adminLogin(args[0]);
+    else if (name === 'adminLogout') runner.adminLogout(args[0]);
+    else if (name === 'adminData') runner.adminData(args[0]);
+    else if (name === 'adminStartSession') runner.adminStartSession(args[0], args[1]);
+    else if (name === 'adminCloseRequests') runner.adminCloseRequests(args[0]);
+    else if (name === 'adminReopenRequests') runner.adminReopenRequests(args[0]);
+    else if (name === 'adminSetRequest') runner.adminSetRequest(args[0], args[1], args[2], args[3]);
+    else if (name === 'adminCloseSession') runner.adminCloseSession(args[0]);
+    else finish(fail, new Error('Unknown action.'));
+  } catch (err) {
+    finish(fail, err);
+  }
+}
+function applyAdmin(data) {
+  adminReady = true;
+  state = {
+    session: data && data.session ? data.session : null,
+    requests: data && Array.isArray(data.requests) ? data.requests : []
+  };
+  lastUpdated = new Date();
+  requestRender();
+  stamp();
+}
+function load() {
+  if (!token || !hasRpc()) return;
+  const my = ++loadSeq;
+  lastFetchAt = Date.now();
+  server('adminData', [token], function (data) {
+    if (my !== loadSeq) return;
+    setBusy(false);
+    applyAdmin(data);
+  }, function (err) {
+    if (my !== loadSeq) return;
+    setBusy(false);
+    const text = errorText(err);
+    if (isAuthError(text)) {
+      dropSession(text);
+      return;
+    }
+    paintMsg(text);
+  });
+}
+function mutate(name, args, after) {
+  if (busy || !token) return;
+  const my = ++loadSeq;
+  setBusy(true);
+  paintMsg('');
+  server(name, [token].concat(args || []), function (result) {
+    if (after) after(result);
+    server('adminData', [token], function (data) {
+      if (my !== loadSeq) return;
+      setBusy(false);
+      applyAdmin(data);
+    }, function (err) {
+      if (my !== loadSeq) return;
+      setBusy(false);
+      const text = errorText(err);
+      if (isAuthError(text)) dropSession(text);
+      else paintMsg(text);
+    });
+  }, function (err) {
+    if (my !== loadSeq) return;
+    setBusy(false);
+    const text = errorText(err);
+    if (isAuthError(text)) dropSession(text);
+    else paintMsg(text);
+  });
+}
+function resetPasswordField() {
+  const input = document.getElementById('password');
+  input.value = '';
+  input.type = 'password';
+  const toggle = document.getElementById('togglePassword');
+  toggle.textContent = 'Show';
+  toggle.setAttribute('aria-pressed', 'false');
+}
+function bind() {
+  document.getElementById('loginForm').addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (busy) return;
+    const password = document.getElementById('password').value;
+    if (!password) {
+      paintMsg('Enter the admin password.');
+      return;
+    }
+    if (password.length < 16) {
+      paintMsg('The admin password is at least 16 characters.');
+      return;
+    }
+    setBusy(true);
+    paintMsg('');
+    server('adminLogin', [password], function (next) {
+      setBusy(false);
+      token = String(next || '');
+      sessionStore.set(TOKEN_KEY, token);
+      resetPasswordField();
+      paintMsg('');
+      showApp();
+      load();
+    }, function (err) {
+      setBusy(false);
+      paintMsg(errorText(err));
+    });
+  });
+  document.getElementById('togglePassword').addEventListener('click', function () {
+    const input = document.getElementById('password');
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    this.textContent = show ? 'Hide' : 'Show';
+    this.setAttribute('aria-pressed', show ? 'true' : 'false');
+    input.focus();
+  });
+  document.getElementById('startForm').addEventListener('submit', function (event) {
+    event.preventDefault();
+    mutate('adminStartSession', [document.getElementById('venue').value], function () {
+      document.getElementById('venue').value = '';
+      setBanner(null);
+    });
+  });
+  document.getElementById('pauseBtn').addEventListener('click', function () {
+    if (busy) return;
+    if (!window.confirm('Stop new requests and votes? The queue stays visible, and you can reopen requests later.')) return;
+    mutate('adminCloseRequests', []);
+  });
+  document.getElementById('reopenBtn').addEventListener('click', function () { mutate('adminReopenRequests', []); });
+  document.getElementById('endBtn').addEventListener('click', function () {
+    if (busy) return;
+    if (!window.confirm('End this performance and save the CSV archive to Google Drive?')) return;
+    mutate('adminCloseSession', [], function (url) {
+      setBanner('ok', 'Archive saved.', url);
+    });
+  });
+  document.getElementById('refreshBtn').addEventListener('click', function () { if (!busy) load(); });
+  document.getElementById('signOut').addEventListener('click', function () {
+    const current = token;
+    token = '';
+    sessionStore.del(TOKEN_KEY);
+    if (current && hasRpc()) server('adminLogout', [current], function () {}, function () {});
+    setBanner(null);
+    setBusy(false);
+    showLogin(true);
+    paintMsg('');
+  });
+  const area = document.getElementById('requests');
+  area.addEventListener('pointerdown', function () { holdRenderUntil = Date.now() + 700; });
+  area.addEventListener('input', function (event) {
+    const input = event.target;
+    if (!input.classList || !input.classList.contains('order')) return;
+    const id = input.getAttribute('data-id');
+    const serverValue = input.getAttribute('data-server') || '';
+    if (input.value !== serverValue) drafts[id] = input.value;
+    else delete drafts[id];
+  });
+  area.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter' || !event.target.classList || !event.target.classList.contains('order')) return;
+    event.preventDefault();
+    const box = event.target.closest('article');
+    const button = box && box.querySelector('button[data-act="queue"]');
+    if (button) button.click();
+  });
+  area.addEventListener('click', function (event) {
+    const button = event.target.closest('button[data-act]');
+    if (!button || busy) return;
+    const box = button.closest('[data-id]');
+    if (!box) return;
+    const id = box.getAttribute('data-id');
+    const act = button.getAttribute('data-act');
+    if (act === 'queue') {
+      const input = box.querySelector('input.order');
+      const parsed = parseOrder(input ? input.value : '');
+      if (parsed == null) {
+        delete drafts[id];
+        if (input) input.value = input.getAttribute('data-server') || '';
+        paintMsg('Order must be a whole number from 1 to 9999, or blank to add the song at the end.');
+        return;
+      }
+      delete drafts[id];
+      mutate('adminSetRequest', [id, 'QUED', parsed]);
+      return;
+    }
+    delete drafts[id];
+    if (act === 'park') mutate('adminSetRequest', [id, 'PARK', '']);
+    if (act === 'played') mutate('adminSetRequest', [id, 'PLYD', '']);
+    if (act === 'requ') mutate('adminSetRequest', [id, 'REQU', '']);
+  });
+}
+function boot() {
+  bind();
+  paintBanner();
+  if (!hasRpc()) {
+    paintMsg('This page has to be opened from the deployed /exec?admin=1 link.');
+    showLogin(false);
+    return;
+  }
+  token = sessionStore.get(TOKEN_KEY) || '';
+  if (token) {
+    showApp();
+    load();
+  } else {
+    showLogin(false);
+  }
+  setInterval(function () {
+    if (document.hidden || busy || !token || orderEditing()) return;
+    if (Date.now() - lastFetchAt < 15000) return;
+    load();
+  }, 20000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && token && !busy && !orderEditing() && Date.now() - lastFetchAt > 5000) load();
+  });
+}
+boot();
+  </script>
+</body>
+</html>
