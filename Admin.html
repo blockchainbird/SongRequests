@@ -1,0 +1,33 @@
+<!DOCTYPE html><html><head><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font:16px system-ui,sans-serif;background:#f6f7f9;margin:0;color:#17283b}main{padding:18px;max-width:750px;margin:auto}input{padding:10px;border:1px solid #bbc5cf;border-radius:8px;font:inherit;max-width:100%;box-sizing:border-box}button{border:1px solid #9facbd;border-radius:8px;padding:10px;background:white;font:inherit;cursor:pointer}.primary{background:#17416b;color:white}.card{background:white;border:1px solid #e3e6ea;border-radius:12px;padding:12px;margin:8px 0}.line{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.muted{color:#637181}#msg{color:#943c2b;margin:12px 0}.controls{display:flex;gap:7px;flex-wrap:wrap}.song{font-weight:700}.small{font-size:13px}.order{width:72px}
+</style></head><body><main><h1>🎤 Performance Manager</h1><div id="msg" role="status"></div>
+<div id="login"><p>Enter the long admin password configured in Apps Script.</p><input type="password" id="password" placeholder="Admin password"><button class="primary" onclick="login()">Sign in</button></div>
+<div id="app" hidden><div id="session" class="card"></div><div class="controls"><input id="venue" placeholder="Venue / session name"><button onclick="call('adminStartSession',[document.getElementById('venue').value])">Start Session</button><button onclick="call('adminCloseRequests',[])">Close Requests</button><button onclick="call('adminReopenRequests',[])">Reopen Requests</button><button onclick="closeSession()">Close Session + Archive</button></div><h2>Requests / Queue</h2><p class="muted">Lower Order plays first. Give a favourite song a higher number to move it later. Only you can change Order.</p><div id="requests"></div><button onclick="load()">Refresh</button></div>
+</main><script>
+let token='',state={requests:[],session:null};const msg=document.getElementById('msg');
+function call(name,args,cb){msg.textContent='';google.script.run.withSuccessHandler(cb||load).withFailureHandler(e=>msg.textContent=e.message)[name](token,...args)}
+function login(){google.script.run.withSuccessHandler(t=>{token=t;document.getElementById('password').value='';document.getElementById('login').hidden=true;document.getElementById('app').hidden=false;load()}).withFailureHandler(e=>msg.textContent=e.message).adminLogin(document.getElementById('password').value)}
+function load(){call('adminData',[],d=>{state=d;render()})}
+function closeSession(){if(confirm('Close this performance and save the final CSV archive in Google Drive?'))call('adminCloseSession',[],url=>{msg.textContent='Archive saved: '+url;load()})}
+function elm(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
+function btn(text,func){const b=elm('button',text);b.onclick=func;return b}
+function render(){const s=state.session;document.getElementById('session').textContent=s?s.venue+' — '+s.state+' — '+s.id:'No session open. Enter a venue and press Start Session.';
+ const area=document.getElementById('requests');area.replaceChildren();
+ const items=[...state.requests].sort((a,b)=>{
+ const rank={QUED:0,REQU:1,PARK:2,PLYD:3,CANC:4};return (rank[a.status]??5)-(rank[b.status]??5)||((a.order||99999)-(b.order||99999))||b.votes-a.votes});
+ items.forEach(r=>{
+ const box=elm('div',undefined,'card'),line=elm('div',undefined,'line'),info=elm('div');
+ info.append(elm('div',r.song,'song'),elm('div',r.artist+' · 👍 '+r.votes+' · '+r.status,'muted small'));line.append(info);
+ const controls=elm('div',undefined,'controls'),ord=elm('input');ord.type='number';ord.min='1';ord.max='9999';ord.className='order';ord.value=r.order||'';ord.placeholder='Order';
+ controls.append(ord,btn('Queue / Move',()=>call('adminSetRequest',[r.id,'QUED',ord.value])));
+ if(r.status!=='CANC'){
+  controls.append(btn('Park',()=>call('adminSetRequest',[r.id,'PARK',0])));
+  controls.append(btn('Played',()=>call('adminSetRequest',[r.id,'PLYD',0])));
+  controls.append(btn('Unqueue',()=>call('adminSetRequest',[r.id,'REQU',0])));
+ }
+ line.append(controls);box.append(line);area.append(box);
+ });
+}
+
+</script></body></html>

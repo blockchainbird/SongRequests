@@ -1,0 +1,77 @@
+<!DOCTYPE html><html><head><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font:16px system-ui,-apple-system,sans-serif;background:#f6f7f9;color:#16202b;margin:0}main{max-width:630px;margin:auto;padding:18px}h1{font-size:25px;margin:5px 0}small,.muted{color:#596573}.tabs{display:flex;gap:8px;margin:18px 0}button{cursor:pointer;border:1px solid #a9b5c1;background:white;border-radius:9px;padding:10px;font:inherit}button:disabled{opacity:.45;cursor:default}button.selected,.primary{background:#163e6c;color:white}input{width:100%;padding:14px;border:1px solid #a9b5c1;border-radius:10px;font-size:17px;box-sizing:border-box}.card{background:white;border:1px solid #e1e5ea;border-radius:12px;padding:13px;margin:9px 0}.line{display:flex;justify-content:space-between;align-items:center;gap:10px}.song{font-weight:700}.meta{color:#596573;font-size:14px;margin-top:4px}.hidden{display:none}.buttons{display:flex;gap:7px;align-items:center;flex-wrap:wrap}#msg{color:#913f26;padding:6px 0}.tag{font-size:12px;color:#596573;background:#edf1f5;border-radius:6px;padding:5px}
+</style></head><body><main><h1>🎵 Request a Song</h1><div id="session" class="muted">Loading…</div><div id="msg" role="status"></div>
+<div class="tabs"><button id="tabSearch" class="selected" onclick="tab('search')">Find a song</button><button id="tabQueue" onclick="tab('queue')">Playing queue</button></div>
+<section id="searchPane"><input id="search" placeholder="Song or artist — 3+ letters" oninput="render()"><p class="muted">Requests and votes are counted for this performance only.</p><div id="searchResults"></div></section>
+<section id="queuePane" class="hidden"><h3>My Requests</h3><p class="muted" style="font-size:13px">Requests made or supported from this browser.</p><div id="mine"></div><h3>Coming up</h3><div id="queue"></div><h3>Already played</h3><div id="played"></div></section>
+<p class="muted" style="font-size:12px">Votes reflect audience interest; the performer chooses the playing order. One vote per song per browser identity. Reload to see new changes.</p>
+</main><script>
+let state={session:null,playlist:[],requests:[]},mode='search';
+let visitor=localStorage.getItem('sr_visitor');
+if(!visitor){visitor=(crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{let r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16)}));localStorage.setItem('sr_visitor',visitor)}
+const storageKey=id=>'sr_owner_'+id;
+const votedKey=id=>'sr_vote_'+id;
+function rpc(name,args,cb){document.getElementById('msg').textContent='';google.script.run.withSuccessHandler(cb||(()=>load())).withFailureHandler(e=>document.getElementById('msg').textContent=e.message)[name](...args)}
+function load(){rpc('getPublicData',[],d=>{state=d;render()})}
+function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
+function actionButton(text,fn){let b=el('button','',text);b.onclick=fn;return b}
+function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()}
+function tab(x){mode=x;render()}
+function render(){
+ const s=state.session,open=s&&s.state==='OPEN';
+ document.getElementById('session').textContent=s ? s.venue+' · '+(open?'Accepting requests':s.state==='NO_REQUESTS'?'Requests closed — final songs':'') : 'No active performance at the moment';
+ document.getElementById('tabSearch').className=mode==='search'?'selected':'';
+ document.getElementById('tabQueue').className=mode==='queue'?'selected':'';
+ document.getElementById('searchPane').classList.toggle('hidden',mode!=='search');
+ document.getElementById('queuePane').classList.toggle('hidden',mode!=='queue');
+ const out=document.getElementById('searchResults');out.replaceChildren();
+ const q=norm(document.getElementById('search').value.trim());
+ if(mode==='search'){
+  if(q.length<3){out.append(el('p','muted','Type at least 3 characters to search.'));}else{
+  const found=state.playlist.filter(x=>norm(x.song+' '+x.artist).includes(q)).slice(0,100);
+  out.append(el('p','muted',found.length+' matching songs'+(found.length===100?' (first 100)':'')));
+  found.forEach(x=>{
+   const r=state.requests.find(t=>norm(t.song)===norm(x.song)&&norm(t.artist)===norm(x.artist)&&t.status!=='CANC');
+   const box=el('div','card'),line=el('div','line'),title=el('div');title.append(el('div','song',x.song),el('div','meta',x.artist));line.append(title);
+   const controls=el('div','buttons');
+   if(r){
+    const mine=!!localStorage.getItem(storageKey(r.id)),voted=localStorage.getItem(votedKey(r.id))==='1';
+    if(open && ['REQU','QUED'].includes(r.status)){controls.append(actionButton((voted?'✓ ':'👍 ')+r.votes,()=>rpc('voteSong',[r.id,visitor],res=>{localStorage.setItem(votedKey(r.id),res.voted?'1':'0');load()})))}
+    else controls.append(el('span','tag','👍 '+r.votes));
+    if(mine && r.status==='REQU' && open) controls.append(actionButton('Cancel',()=>{if(confirm('Cancel this song request?'))rpc('cancelOwnRequest',[r.id,localStorage.getItem(storageKey(r.id))])}));
+    controls.append(el('span','tag',r.status));
+   } else if(open){controls.append(actionButton('Request',()=>rpc('requestSong',[x.song,x.artist,'',visitor],res=>{if(res.ownerToken)localStorage.setItem(storageKey(res.id),res.ownerToken);load()})))}
+   line.append(controls);box.append(line);out.append(box);
+  });
+  }
+ }
+ const queued=state.requests.filter(x=>x.status==='QUED').sort((a,b)=>(a.order||99999)-(b.order||99999)),played=state.requests.filter(x=>x.status==='PLYD');
+ function listing(id,rows){const container=document.getElementById(id);container.replaceChildren();if(!rows.length)container.append(el('p','muted','No songs yet.'));rows.forEach(r=>{const box=el('div','card'),line=el('div','line'),name=el('div');name.append(el('div','song',(id==='queue'?'#'+r.order+' · ':'')+r.song),el('div','meta',r.artist));line.append(name,el('span','tag','👍 '+r.votes));box.append(line);container.append(box)})}
+ listing('queue',queued);listing('played',played);
+ // A request belongs to this browser if its owner token is saved here.
+ // Upvoted songs are shown separately within My Requests, so voting is
+ // not misrepresented as creating the original request.
+ const myRows=state.requests.filter(r=>
+   !!localStorage.getItem(storageKey(r.id)) || localStorage.getItem(votedKey(r.id))==='1'
+ );
+ const mine=document.getElementById('mine');mine.replaceChildren();
+ if(!myRows.length) mine.append(el('p','muted','You have no requests or supported songs yet.'));
+ else myRows.sort((a,b)=>{
+   const aa=a.status==='QUED' && a.order!=null ? a.order : Number.MAX_SAFE_INTEGER;
+   const bb=b.status==='QUED' && b.order!=null ? b.order : Number.MAX_SAFE_INTEGER;
+   return aa-bb || a.song.localeCompare(b.song);
+ }).forEach(r=>{
+   const box=el('div','card'),line=el('div','line'),name=el('div');
+   name.append(el('div','song',r.song),el('div','meta',r.artist));
+   const details=el('div','buttons');
+   const mineOwn=!!localStorage.getItem(storageKey(r.id));
+   details.append(el('span','tag',mineOwn?'Requested by me':'Upvoted by me'));
+   details.append(el('span','tag',r.status));
+   if(r.status==='QUED' && r.order!=null) details.append(el('span','tag','Order '+r.order));
+   details.append(el('span','tag','👍 '+r.votes));
+   box.append(line);line.append(name);box.append(details);mine.append(box);
+ });
+}
+load();setInterval(load,20000);
+</script></body></html>
