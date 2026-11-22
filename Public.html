@@ -1,77 +1,860 @@
-<!DOCTYPE html><html><head><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body{font:16px system-ui,-apple-system,sans-serif;background:#f6f7f9;color:#16202b;margin:0}main{max-width:630px;margin:auto;padding:18px}h1{font-size:25px;margin:5px 0}small,.muted{color:#596573}.tabs{display:flex;gap:8px;margin:18px 0}button{cursor:pointer;border:1px solid #a9b5c1;background:white;border-radius:9px;padding:10px;font:inherit}button:disabled{opacity:.45;cursor:default}button.selected,.primary{background:#163e6c;color:white}input{width:100%;padding:14px;border:1px solid #a9b5c1;border-radius:10px;font-size:17px;box-sizing:border-box}.card{background:white;border:1px solid #e1e5ea;border-radius:12px;padding:13px;margin:9px 0}.line{display:flex;justify-content:space-between;align-items:center;gap:10px}.song{font-weight:700}.meta{color:#596573;font-size:14px;margin-top:4px}.hidden{display:none}.buttons{display:flex;gap:7px;align-items:center;flex-wrap:wrap}#msg{color:#913f26;padding:6px 0}.tag{font-size:12px;color:#596573;background:#edf1f5;border-radius:6px;padding:5px}
-</style></head><body><main><h1>🎵 Request a Song</h1><div id="session" class="muted">Loading…</div><div id="msg" role="status"></div>
-<div class="tabs"><button id="tabSearch" class="selected" onclick="tab('search')">Find a song</button><button id="tabQueue" onclick="tab('queue')">Playing queue</button></div>
-<section id="searchPane"><input id="search" placeholder="Song or artist — 3+ letters" oninput="render()"><p class="muted">Requests and votes are counted for this performance only.</p><div id="searchResults"></div></section>
-<section id="queuePane" class="hidden"><h3>My Requests</h3><p class="muted" style="font-size:13px">Requests made or supported from this browser.</p><div id="mine"></div><h3>Coming up</h3><div id="queue"></div><h3>Already played</h3><div id="played"></div></section>
-<p class="muted" style="font-size:12px">Votes reflect audience interest; the performer chooses the playing order. One vote per song per browser identity. Reload to see new changes.</p>
-</main><script>
-let state={session:null,playlist:[],requests:[]},mode='search';
-let visitor=localStorage.getItem('sr_visitor');
-if(!visitor){visitor=(crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{let r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16)}));localStorage.setItem('sr_visitor',visitor)}
-const storageKey=id=>'sr_owner_'+id;
-const votedKey=id=>'sr_vote_'+id;
-function rpc(name,args,cb){document.getElementById('msg').textContent='';google.script.run.withSuccessHandler(cb||(()=>load())).withFailureHandler(e=>document.getElementById('msg').textContent=e.message)[name](...args)}
-function load(){rpc('getPublicData',[],d=>{state=d;render()})}
-function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
-function actionButton(text,fn){let b=el('button','',text);b.onclick=fn;return b}
-function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()}
-function tab(x){mode=x;render()}
-function render(){
- const s=state.session,open=s&&s.state==='OPEN';
- document.getElementById('session').textContent=s ? s.venue+' · '+(open?'Accepting requests':s.state==='NO_REQUESTS'?'Requests closed — final songs':'') : 'No active performance at the moment';
- document.getElementById('tabSearch').className=mode==='search'?'selected':'';
- document.getElementById('tabQueue').className=mode==='queue'?'selected':'';
- document.getElementById('searchPane').classList.toggle('hidden',mode!=='search');
- document.getElementById('queuePane').classList.toggle('hidden',mode!=='queue');
- const out=document.getElementById('searchResults');out.replaceChildren();
- const q=norm(document.getElementById('search').value.trim());
- if(mode==='search'){
-  if(q.length<3){out.append(el('p','muted','Type at least 3 characters to search.'));}else{
-  const found=state.playlist.filter(x=>norm(x.song+' '+x.artist).includes(q)).slice(0,100);
-  out.append(el('p','muted',found.length+' matching songs'+(found.length===100?' (first 100)':'')));
-  found.forEach(x=>{
-   const r=state.requests.find(t=>norm(t.song)===norm(x.song)&&norm(t.artist)===norm(x.artist)&&t.status!=='CANC');
-   const box=el('div','card'),line=el('div','line'),title=el('div');title.append(el('div','song',x.song),el('div','meta',x.artist));line.append(title);
-   const controls=el('div','buttons');
-   if(r){
-    const mine=!!localStorage.getItem(storageKey(r.id)),voted=localStorage.getItem(votedKey(r.id))==='1';
-    if(open && ['REQU','QUED'].includes(r.status)){controls.append(actionButton((voted?'✓ ':'👍 ')+r.votes,()=>rpc('voteSong',[r.id,visitor],res=>{localStorage.setItem(votedKey(r.id),res.voted?'1':'0');load()})))}
-    else controls.append(el('span','tag','👍 '+r.votes));
-    if(mine && r.status==='REQU' && open) controls.append(actionButton('Cancel',()=>{if(confirm('Cancel this song request?'))rpc('cancelOwnRequest',[r.id,localStorage.getItem(storageKey(r.id))])}));
-    controls.append(el('span','tag',r.status));
-   } else if(open){controls.append(actionButton('Request',()=>rpc('requestSong',[x.song,x.artist,'',visitor],res=>{if(res.ownerToken)localStorage.setItem(storageKey(res.id),res.ownerToken);load()})))}
-   line.append(controls);box.append(line);out.append(box);
-  });
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="theme-color" content="#f3efe6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#12141a" media="(prefers-color-scheme: dark)">
+  <title>Request a song</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3efe6;
+      --bg-sticky: rgba(243, 239, 230, .94);
+      --card: #fffdf8;
+      --text: #211c16;
+      --muted: #5e564c;
+      --placeholder: #7a7166;
+      --line: #e3d9c8;
+      --line-strong: #cfc3ae;
+      --field: #fff;
+      --accent: #9a3412;
+      --accent-ink: #fff8f3;
+      --chip: #efe7da;
+      --good: #0f6a43;
+      --good-bg: #e4f5ec;
+      --warn: #8a4b08;
+      --warn-bg: #fff1d6;
+      --bad: #9f2d2d;
+      --bad-bg: #fde8e4;
+      --info: #1d4f91;
+      --info-bg: #e7f0fb;
+      --focus: #9a3412;
+      --shadow: 0 10px 30px rgba(70, 48, 20, .06);
+      --queued: #9a3412;
+      --requested: #1d4f91;
+      --parked: #a16207;
+      --played: #6b645b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #12141a;
+        --bg-sticky: rgba(18, 20, 26, .94);
+        --card: #1c2230;
+        --text: #f4f1ea;
+        --muted: #c5c0b6;
+        --placeholder: #b7ad9f;
+        --line: #2e3545;
+        --line-strong: #465066;
+        --field: #141924;
+        --accent: #ffb020;
+        --accent-ink: #2a1c00;
+        --chip: #2a3142;
+        --good: #8ee0b5;
+        --good-bg: #163528;
+        --warn: #ffd27a;
+        --warn-bg: #3a2c12;
+        --bad: #ffb1a6;
+        --bad-bg: #3f221e;
+        --info: #b9d3ff;
+        --info-bg: #1c2c44;
+        --focus: #ffb020;
+        --shadow: none;
+        --queued: #ffb020;
+        --requested: #9ec1ff;
+        --parked: #ffd27a;
+        --played: #b0a89c;
+      }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .55; }
+    .wrap { max-width: 40rem; margin: 0 auto; padding-left: 16px; padding-right: 16px; }
+    .top {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--bg-sticky);
+      border-bottom: 1px solid var(--line);
+    }
+    .head { padding-top: calc(14px + env(safe-area-inset-top)); padding-bottom: 12px; }
+    main.wrap { padding-top: 14px; }
+    h1, h2 { font-family: Georgia, "Iowan Old Style", Palatino, serif; font-weight: 600; letter-spacing: -0.02em; }
+    h1 { margin: 0; font-size: 1.7rem; line-height: 1.15; overflow-wrap: anywhere; }
+    h2 { margin: 0 0 4px; font-size: 1.15rem; }
+    .eyebrow {
+      margin: 0 0 4px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .session {
+      display: inline-block;
+      margin: 8px 0 0;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--chip);
+    }
+    .session.is-open { background: var(--good-bg); color: var(--good); }
+    .session.is-paused { background: var(--warn-bg); color: var(--warn); }
+    .tabs { display: flex; gap: 8px; margin-top: 14px; }
+    .tabs button {
+      flex: 1;
+      min-height: 44px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--text);
+    }
+    .tabs button[aria-selected="true"] {
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: transparent;
+    }
+    .search-row { position: relative; margin-top: 12px; }
+    input[type="text"], input[type="password"], input[type="number"] {
+      width: 100%;
+      min-height: 48px;
+      padding: 12px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: var(--field);
+      color: var(--text);
+      font-size: 16px;
+    }
+    .search-row input { padding-right: 76px; }
+    ::placeholder { color: var(--placeholder); opacity: 1; }
+    .ghost {
+      min-height: 44px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line-strong);
+      background: var(--card);
+      color: var(--text);
+    }
+    .search-row .ghost {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      min-height: 36px;
+    }
+    .primary, .secondary, .danger {
+      min-height: 44px;
+      border-radius: 12px;
+      padding: 10px 14px;
+    }
+    .primary { background: var(--accent); color: var(--accent-ink); border: 1px solid transparent; }
+    .secondary { background: var(--card); color: var(--text); border: 1px solid var(--line-strong); }
+    .danger { background: var(--bad-bg); color: var(--bad); border: 1px solid transparent; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .actions > .primary, .actions > .secondary, .actions > .danger { flex: 1 1 100%; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-left-width: 4px;
+      border-radius: 16px;
+      padding: 14px;
+      margin: 10px 0;
+      box-shadow: var(--shadow);
+    }
+    .card.status-QUED { border-left-color: var(--queued); }
+    .card.status-REQU { border-left-color: var(--requested); }
+    .card.status-PARK { border-left-color: var(--parked); }
+    .card.status-PLYD { border-left-color: var(--played); }
+    .card.status-CANC { border-left-color: var(--bad); }
+    .qno { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--queued); font-size: 1.25rem; }
+    .song { font-weight: 700; font-size: 1.05rem; overflow-wrap: anywhere; }
+    .artist { color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .chip, .count {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--chip);
+      font-size: 13px;
+    }
+    .chip.status-QUED { background: var(--good-bg); color: var(--good); }
+    .chip.status-REQU { background: var(--info-bg); color: var(--info); }
+    .chip.status-PARK { background: var(--warn-bg); color: var(--warn); }
+    .chip.status-PLYD { background: var(--chip); color: var(--muted); }
+    .chip.status-CANC { background: var(--bad-bg); color: var(--bad); }
+    .block { margin: 22px 0; }
+    .block h2 { scroll-margin-top: 11rem; }
+    .hint, .muted, .foot { color: var(--muted); }
+    .empty {
+      color: var(--muted);
+      border: 1px dashed var(--line-strong);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    #msg { padding: 10px 12px; border-radius: 12px; margin: 0 0 12px; }
+    #msg.error { background: var(--bad-bg); color: var(--bad); }
+    #msg.info { background: var(--good-bg); color: var(--good); }
+    #msg .ghost { margin-left: 8px; min-height: 36px; }
+    .pending { margin: 0 0 12px; color: var(--muted); }
+    .foot { font-size: 13px; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+    .foot p { margin: 8px 0; }
+    .sr {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+    button:focus-visible, a:focus-visible, input:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap head">
+      <p class="eyebrow">Live song requests</p>
+      <h1 id="title">Request a song</h1>
+      <p id="session" class="session" role="status">Loading…</p>
+      <div class="tabs" role="tablist" aria-label="Sections">
+        <button type="button" id="tabSearch" role="tab" aria-selected="true" aria-controls="searchPane">Find a song</button>
+        <button type="button" id="tabQueue" role="tab" aria-selected="false" aria-controls="queuePane">Queue</button>
+      </div>
+      <form id="searchForm" class="search" role="search">
+        <div class="search-row">
+          <label class="sr" for="search">Song or artist</label>
+          <input id="search" type="text" placeholder="Song or artist" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="search" maxlength="120">
+          <button type="button" id="clearSearch" class="ghost" hidden>Clear</button>
+        </div>
+      </form>
+    </div>
+  </header>
+  <main class="wrap">
+    <p id="pending" class="pending" hidden>Saving…</p>
+    <p id="msg" role="status" hidden></p>
+    <section id="searchPane" role="tabpanel" aria-labelledby="tabSearch">
+      <p id="searchHint" class="hint"></p>
+      <div id="searchResults"></div>
+    </section>
+    <div id="queuePane" role="tabpanel" aria-labelledby="tabQueue" hidden></div>
+  </main>
+  <footer class="wrap foot">
+    <p>Votes show audience interest. The performer sets the playing order. One vote per song on this browser.</p>
+    <p><button type="button" id="refresh" class="ghost">Refresh now</button> <span id="updated"></span></p>
+  </footer>
+  <noscript><p class="wrap">Song requests need JavaScript enabled.</p></noscript>
+  <script>
+const memoryStore = {};
+const store = {
+  get(key) {
+    if (Object.prototype.hasOwnProperty.call(memoryStore, key)) return memoryStore[key];
+    try { return localStorage.getItem(key); } catch (err) { return null; }
+  },
+  set(key, value) {
+    memoryStore[key] = String(value);
+    try { localStorage.setItem(key, String(value)); } catch (err) {}
   }
- }
- const queued=state.requests.filter(x=>x.status==='QUED').sort((a,b)=>(a.order||99999)-(b.order||99999)),played=state.requests.filter(x=>x.status==='PLYD');
- function listing(id,rows){const container=document.getElementById(id);container.replaceChildren();if(!rows.length)container.append(el('p','muted','No songs yet.'));rows.forEach(r=>{const box=el('div','card'),line=el('div','line'),name=el('div');name.append(el('div','song',(id==='queue'?'#'+r.order+' · ':'')+r.song),el('div','meta',r.artist));line.append(name,el('span','tag','👍 '+r.votes));box.append(line);container.append(box)})}
- listing('queue',queued);listing('played',played);
- // A request belongs to this browser if its owner token is saved here.
- // Upvoted songs are shown separately within My Requests, so voting is
- // not misrepresented as creating the original request.
- const myRows=state.requests.filter(r=>
-   !!localStorage.getItem(storageKey(r.id)) || localStorage.getItem(votedKey(r.id))==='1'
- );
- const mine=document.getElementById('mine');mine.replaceChildren();
- if(!myRows.length) mine.append(el('p','muted','You have no requests or supported songs yet.'));
- else myRows.sort((a,b)=>{
-   const aa=a.status==='QUED' && a.order!=null ? a.order : Number.MAX_SAFE_INTEGER;
-   const bb=b.status==='QUED' && b.order!=null ? b.order : Number.MAX_SAFE_INTEGER;
-   return aa-bb || a.song.localeCompare(b.song);
- }).forEach(r=>{
-   const box=el('div','card'),line=el('div','line'),name=el('div');
-   name.append(el('div','song',r.song),el('div','meta',r.artist));
-   const details=el('div','buttons');
-   const mineOwn=!!localStorage.getItem(storageKey(r.id));
-   details.append(el('span','tag',mineOwn?'Requested by me':'Upvoted by me'));
-   details.append(el('span','tag',r.status));
-   if(r.status==='QUED' && r.order!=null) details.append(el('span','tag','Order '+r.order));
-   details.append(el('span','tag','👍 '+r.votes));
-   box.append(line);line.append(name);box.append(details);mine.append(box);
- });
+};
+function makeId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
 }
-load();setInterval(load,20000);
-</script></body></html>
+const visitor = (function () {
+  let id = store.get('sr_visitor');
+  if (!/^[a-f0-9-]{30,80}$/i.test(String(id || ''))) {
+    id = makeId();
+    store.set('sr_visitor', id);
+  }
+  return String(id);
+})();
+
+let state = { session: null, requests: [], playlist: [], playlistHash: '' };
+let mode = 'search';
+let flash = null;
+let busy = false;
+let loadedOnce = false;
+let loadFailed = false;
+let openQueue = false;
+let lastUpdated = null;
+let lastFetchAt = 0;
+let rpcSeq = 0;
+let searchTimer = 0;
+let scrollMine = false;
+const recentVotes = {};
+const STATUS = { REQU: 'Requested', QUED: 'In queue', PARK: 'On hold', PLYD: 'Played', CANC: 'Cancelled' };
+
+/*test:start*/
+function foldText(value) {
+  const lower = String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/ß/g, 'ss');
+  let out = '';
+  for (let i = 0; i < lower.length; i++) {
+    let ch = lower.charAt(i);
+    const code = lower.charCodeAt(i);
+    if (ch === '\'' || ch === '\u2019' || ch === '`' || ch === '\u00b4') continue;
+    if (ch === '\u00a0' || code === 0x3000 || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f') ch = ' ';
+    const keep = ch !== ' ' && ((code >= 48 && code <= 57) || (code >= 97 && code <= 122) || code > 127);
+    if (keep) out += ch;
+    else if (out.charAt(out.length - 1) !== ' ') out += ' ';
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+function searchPlaylist(query, playlist) {
+  const folded = foldText(query);
+  const compactQuery = folded.replace(/ /g, '');
+  if (compactQuery.length < 3) return { short: true, total: 0, rows: [] };
+  const parts = folded.split(' ').filter(Boolean);
+  const hits = [];
+  const songs = playlist || [];
+  for (let i = 0; i < songs.length; i++) {
+    const item = songs[i];
+    if (!item || !item.song) continue;
+    const title = foldText(item.song);
+    const artist = foldText(item.artist);
+    const spaced = (title + ' ' + artist).trim();
+    const compact = spaced.replace(/ /g, '');
+    let ok = true;
+    for (let p = 0; p < parts.length; p++) {
+      if (spaced.indexOf(parts[p]) === -1 && compact.indexOf(parts[p]) === -1) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    let score = 0;
+    const titleCompact = title.replace(/ /g, '');
+    if (title === folded || titleCompact === compactQuery) score += 100;
+    else if (title.indexOf(folded) === 0 || titleCompact.indexOf(compactQuery) === 0) score += 70;
+    else if (title.indexOf(folded) !== -1 || titleCompact.indexOf(compactQuery) !== -1) score += 50;
+    if (artist === folded || artist.indexOf(folded) === 0) score += 30;
+    else if (artist.indexOf(folded) !== -1 || artist.replace(/ /g, '').indexOf(compactQuery) !== -1) score += 15;
+    hits.push({ item: item, score: score, title: title, artist: artist });
+  }
+  hits.sort(function (a, b) {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.title < b.title) return -1;
+    if (a.title > b.title) return 1;
+    if (a.artist < b.artist) return -1;
+    if (a.artist > b.artist) return 1;
+    return 0;
+  });
+  return { short: false, total: hits.length, rows: hits.slice(0, 40).map(function (hit) { return hit.item; }) };
+}
+/*test:end*/
+
+function hasRpc() {
+  return !!(window.google && google.script && google.script.run);
+}
+function errorText(err) {
+  let text = 'Something went wrong.';
+  if (typeof err === 'string') text = err;
+  else if (err && err.message) text = String(err.message);
+  text = text.replace(/^Error:\s*/i, '');
+  if (text.length > 280) text = text.slice(0, 280);
+  return text || 'Something went wrong.';
+}
+function setFlash(tone, text, source) {
+  flash = tone && text ? { tone: tone, text: text, source: source || 'action' } : null;
+}
+function setBusy(value) {
+  busy = !!value;
+  document.body.classList.toggle('is-busy', busy);
+  const pending = document.getElementById('pending');
+  if (pending) pending.hidden = !busy;
+}
+function ownerKey(id) { return 'sr_owner_' + id; }
+function voteKey(id) { return 'sr_vote_' + id; }
+function isOwned(request) { return !!(request && store.get(ownerKey(request.id))); }
+function isVoted(request) {
+  if (!request) return false;
+  if (typeof request.voted === 'boolean') return request.voted;
+  return store.get(voteKey(request.id)) === '1';
+}
+function inMine(request) { return isOwned(request) || isVoted(request); }
+function clockTime(ms) {
+  if (!ms) return '';
+  const date = new Date(ms);
+  if (isNaN(date.getTime())) return '';
+  try { return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+  catch (err) { return ''; }
+}
+function statusLabel(request) {
+  if (!request) return '';
+  if (request.status === 'QUED' && request.order != null) return 'In queue · #' + request.order;
+  if (request.status === 'PLYD') {
+    const time = clockTime(request.playedAt);
+    return time ? 'Played ' + time : 'Played';
+  }
+  if (request.status === 'CANC') return 'Cancelled';
+  return STATUS[request.status] || request.status || 'Unknown';
+}
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+function bySong(a, b) {
+  return a.song.localeCompare(b.song, undefined, { sensitivity: 'base' })
+    || a.artist.localeCompare(b.artist, undefined, { sensitivity: 'base' });
+}
+function byQueue(a, b) {
+  const ao = a.order == null ? 99999 : a.order;
+  const bo = b.order == null ? 99999 : b.order;
+  return ao - bo || b.votes - a.votes || bySong(a, b);
+}
+function byVotes(a, b) { return b.votes - a.votes || bySong(a, b); }
+function byPlayed(a, b) { return (b.playedAt || 0) - (a.playedAt || 0) || bySong(a, b); }
+function findRequest(song, artist) {
+  const active = state.requests.filter(function (row) { return row.status !== 'CANC'; });
+  const exact = active.filter(function (row) { return row.song === song && row.artist === artist; });
+  const pool = exact.length ? exact : active.filter(function (row) {
+    return foldText(row.song) === foldText(song) && foldText(row.artist) === foldText(artist);
+  });
+  const rank = { QUED: 0, REQU: 1, PARK: 2, PLYD: 3 };
+  pool.sort(function (a, b) {
+    return (rank[a.status] == null ? 9 : rank[a.status]) - (rank[b.status] == null ? 9 : rank[b.status]);
+  });
+  return pool[0] || null;
+}
+function applyData(data) {
+  const requests = (data.requests || []).map(function (row) {
+    let order = null;
+    if (row.order != null && row.order !== '') {
+      const n = Number(row.order);
+      order = Number.isFinite(n) ? n : null;
+    }
+    const copy = {
+      id: String(row.id),
+      song: String(row.song || ''),
+      artist: String(row.artist || ''),
+      status: String(row.status || ''),
+      order: order,
+      votes: Math.max(0, Number(row.votes) || 0),
+      playedAt: row.playedAt || null,
+      createdAt: row.createdAt || null,
+      voted: typeof row.voted === 'boolean' ? row.voted : undefined
+    };
+    const recent = recentVotes[copy.id];
+    if (recent && recent.until > Date.now()) copy.voted = recent.voted;
+    return copy;
+  });
+  const incomingHash = data.playlistHash || '';
+  if (Array.isArray(data.playlist)) {
+    state.playlist = data.playlist;
+    if (incomingHash) state.playlistHash = incomingHash;
+  } else if (!incomingHash || incomingHash === state.playlistHash) {
+    // The repertoire is unchanged, or this response didn't include one.
+  } else {
+    // The hash changed but the songs were not included. Fetch them next time.
+    state.playlistHash = '';
+  }
+  state.session = data.session || null;
+  state.requests = requests;
+}
+function dataSnap() {
+  const requests = state.requests.map(function (row) {
+    return [row.id, row.status, row.order, row.votes, row.playedAt, row.voted, row.createdAt].join('|');
+  }).join('\n');
+  const owned = state.requests.filter(isOwned).map(function (row) { return row.id; }).join(',');
+  const session = state.session ? [state.session.id, state.session.venue, state.session.state].join('|') : '';
+  const query = document.getElementById('search').value;
+  return [mode, query, busy ? '1' : '0', flash ? flash.tone + flash.text : '', state.playlistHash, state.playlist.length, session, requests, owned].join('\u0001');
+}
+let lastSnap = '';
+function stamp() {
+  const node = document.getElementById('updated');
+  if (!node) return;
+  node.textContent = lastUpdated ? 'Updated ' + clockTime(lastUpdated) : '';
+}
+function publish() {
+  const snap = dataSnap();
+  if (snap === lastSnap) {
+    stamp();
+    return;
+  }
+  render();
+  lastSnap = snap;
+  stamp();
+}
+function safePublish() {
+  try { publish(); }
+  catch (err) {
+    const node = document.getElementById('msg');
+    node.hidden = false;
+    node.className = 'error';
+    node.textContent = 'This page hit a display error. Reload it.';
+  }
+}
+function paintFlash() {
+  const node = document.getElementById('msg');
+  node.className = flash ? flash.tone : '';
+  node.replaceChildren();
+  if (!flash) {
+    node.hidden = true;
+    return;
+  }
+  node.hidden = false;
+  node.appendChild(document.createTextNode(flash.text));
+  if (flash.source === 'load') {
+    node.appendChild(document.createTextNode(' '));
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'ghost';
+    retry.textContent = 'Try again';
+    retry.addEventListener('click', function () { if (!busy) load(false); });
+    node.appendChild(retry);
+  }
+}
+function actionButton(label, className, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.textContent = label;
+  button.disabled = busy;
+  button.addEventListener('click', onClick);
+  return button;
+}
+function votePill(votes) {
+  const pill = el('span', 'count');
+  pill.textContent = votes + (votes === 1 ? ' vote' : ' votes');
+  return pill;
+}
+function publicCard(song, artist, request, options) {
+  const opts = options || {};
+  const session = state.session;
+  const open = !!(session && session.state === 'OPEN');
+  const card = el('article', 'card' + (request ? ' status-' + request.status : ''));
+  if (opts.prominent && request && request.order != null) card.appendChild(el('div', 'qno', '#' + request.order));
+  const name = el('div', 'song', song);
+  name.translate = false;
+  card.appendChild(name);
+  if (artist) {
+    const by = el('div', 'artist', artist);
+    by.translate = false;
+    card.appendChild(by);
+  }
+  if (request) {
+    const meta = el('div', 'meta-row');
+    if (opts.mine) meta.appendChild(el('span', 'chip', isOwned(request) ? 'Requested by me' : 'Voted by me'));
+    meta.appendChild(el('span', 'chip status-' + request.status, statusLabel(request)));
+    if (request.status !== 'CANC') meta.appendChild(votePill(request.votes));
+    else meta.appendChild(el('span', 'chip', 'Votes no longer count'));
+    card.appendChild(meta);
+    const actions = el('div', 'actions');
+    if (open && (request.status === 'REQU' || request.status === 'QUED')) {
+      const voted = isVoted(request);
+      const button = actionButton(voted ? 'Voted' : 'Vote', voted ? 'primary' : 'secondary', function () { vote(request.id); });
+      button.setAttribute('aria-pressed', voted ? 'true' : 'false');
+      actions.appendChild(button);
+    }
+    if (open && isOwned(request) && request.status === 'REQU') {
+      actions.appendChild(actionButton('Cancel request', 'danger', function () { cancelRequest(request); }));
+    }
+    if (actions.childNodes.length) card.appendChild(actions);
+  } else if (open) {
+    const actions = el('div', 'actions');
+    actions.appendChild(actionButton('Request', 'primary', function () { ask(song, artist); }));
+    card.appendChild(actions);
+  }
+  return card;
+}
+function sectionBlock(title, hint, rows, emptyText, renderRow) {
+  const block = el('section', 'block');
+  block.appendChild(el('h2', '', title));
+  if (hint) block.appendChild(el('p', 'hint', hint));
+  if (!rows.length) block.appendChild(el('p', 'empty', emptyText));
+  rows.forEach(function (row) { block.appendChild(renderRow(row)); });
+  return block;
+}
+function fillSearch() {
+  const hint = document.getElementById('searchHint');
+  const out = document.getElementById('searchResults');
+  const query = document.getElementById('search').value;
+  document.getElementById('clearSearch').hidden = !String(query || '').trim();
+  out.replaceChildren();
+  if (!loadedOnce && !state.playlist.length) {
+    hint.textContent = loadFailed ? '' : 'Loading the song list…';
+    return;
+  }
+  const session = state.session;
+  const open = !!(session && session.state === 'OPEN');
+  const paused = !!(session && session.state === 'NO_REQUESTS');
+  if (!String(query || '').trim()) {
+    hint.textContent = !loadedOnce ? '' : open
+      ? 'Search by song or artist. Words can be in any order.'
+      : paused
+        ? 'Requests and votes are paused. You can still search and read the queue.'
+        : 'You can look through the songs. Requests open when a performance starts.';
+    return;
+  }
+  const found = searchPlaylist(query, state.playlist);
+  if (found.short) {
+    hint.textContent = 'Type at least 3 characters.';
+    return;
+  }
+  if (!found.total) {
+    hint.textContent = 'No songs match that search.';
+    return;
+  }
+  hint.textContent = found.total > found.rows.length
+    ? 'Showing ' + found.rows.length + ' of ' + found.total + ' matches. Add another word to narrow the list.'
+    : found.total + (found.total === 1 ? ' matching song' : ' matching songs');
+  found.rows.forEach(function (song) {
+    out.appendChild(publicCard(song.song, song.artist, findRequest(song.song, song.artist)));
+  });
+}
+function mineRows() {
+  const rank = { QUED: 0, REQU: 1, PARK: 2, PLYD: 3, CANC: 4 };
+  return state.requests.filter(inMine).sort(function (a, b) {
+    const ar = rank[a.status] == null ? 9 : rank[a.status];
+    const br = rank[b.status] == null ? 9 : rank[b.status];
+    if (ar !== br) return ar - br;
+    if (a.status === 'QUED') return byQueue(a, b);
+    return bySong(a, b);
+  });
+}
+function fillQueue() {
+  const root = document.getElementById('queuePane');
+  root.replaceChildren();
+  root.appendChild(sectionBlock('My songs', 'Requested or voted for on this phone.', mineRows(), 'Nothing here yet.', function (row) {
+    return publicCard(row.song, row.artist, row, { mine: true });
+  }));
+  const queued = state.requests.filter(function (row) { return row.status === 'QUED'; }).sort(byQueue);
+  root.appendChild(sectionBlock('Coming up', '', queued, 'Nothing is queued yet.', function (row) {
+    return publicCard(row.song, row.artist, row, { prominent: true });
+  }));
+  const waiting = state.requests.filter(function (row) { return row.status === 'REQU'; }).sort(byVotes);
+  if (waiting.length) {
+    root.appendChild(sectionBlock('Requested tonight', 'Not in the playing order yet.', waiting, '', function (row) {
+      return publicCard(row.song, row.artist, row);
+    }));
+  }
+  const held = state.requests.filter(function (row) { return row.status === 'PARK'; }).sort(bySong);
+  if (held.length) {
+    root.appendChild(sectionBlock('On hold', 'Set aside by the performer.', held, '', function (row) {
+      return publicCard(row.song, row.artist, row);
+    }));
+  }
+  const played = state.requests.filter(function (row) { return row.status === 'PLYD'; }).sort(byPlayed);
+  if (played.length) {
+    root.appendChild(sectionBlock('Already played', '', played, '', function (row) {
+      return publicCard(row.song, row.artist, row);
+    }));
+  }
+  if (scrollMine) {
+    scrollMine = false;
+    const heading = root.querySelector('h2');
+    if (heading && heading.scrollIntoView) heading.scrollIntoView({ block: 'start' });
+  }
+}
+function render() {
+  paintFlash();
+  const session = state.session;
+  const open = !!(session && session.state === 'OPEN');
+  const paused = !!(session && session.state === 'NO_REQUESTS');
+  document.getElementById('title').textContent = session && session.venue ? session.venue : 'Request a song';
+  document.title = session && session.venue ? session.venue + ' · Song requests' : 'Request a song';
+  const sessionEl = document.getElementById('session');
+  sessionEl.textContent = !loadedOnce && !loadFailed
+    ? 'Loading…'
+    : loadFailed && !loadedOnce
+      ? 'Couldn’t load the performance.'
+      : !session
+        ? 'No performance is open right now.'
+        : open
+          ? 'Accepting requests and votes'
+          : paused
+            ? 'Requests are closed. You can still browse the queue.'
+            : session.state;
+  sessionEl.className = 'session ' + (!session ? 'is-none' : open ? 'is-open' : 'is-paused');
+  const queuedCount = state.requests.filter(function (row) { return row.status === 'QUED'; }).length;
+  document.getElementById('tabQueue').textContent = queuedCount ? 'Queue · ' + queuedCount : 'Queue';
+  const searchTab = mode === 'search';
+  document.getElementById('tabSearch').setAttribute('aria-selected', searchTab ? 'true' : 'false');
+  document.getElementById('tabQueue').setAttribute('aria-selected', searchTab ? 'false' : 'true');
+  document.getElementById('searchPane').hidden = !searchTab;
+  document.getElementById('queuePane').hidden = searchTab;
+  document.getElementById('searchForm').hidden = !searchTab;
+  if (searchTab) fillSearch();
+  else fillQueue();
+  document.getElementById('refresh').disabled = busy;
+}
+function dispatch(runner, name, args) {
+  if (name === 'getPublicData') runner.getPublicData(args[0], args[1]);
+  else if (name === 'requestSong') runner.requestSong(args[0], args[1], args[2], args[3]);
+  else if (name === 'voteSong') runner.voteSong(args[0], args[1]);
+  else if (name === 'cancelOwnRequest') runner.cancelOwnRequest(args[0], args[1]);
+  else throw new Error('Unknown action.');
+}
+function rpc(name, args, onOk, onErr) {
+  if (!hasRpc()) {
+    onErr(new Error('Open the published web app link.'));
+    return;
+  }
+  const my = ++rpcSeq;
+  let done = false;
+  const finish = function (fn, value) {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    if (name === 'getPublicData' && my !== rpcSeq) return;
+    fn(value);
+  };
+  const timer = setTimeout(function () {
+    finish(onErr, new Error('The server took too long. Try again.'));
+  }, 25000);
+  try {
+    const runner = google.script.run
+      .withSuccessHandler(function (value) { finish(onOk, value); })
+      .withFailureHandler(function (err) { finish(onErr, err); });
+    dispatch(runner, name, args);
+  } catch (err) {
+    finish(onErr, err);
+  }
+}
+function load(force) {
+  if (!hasRpc()) return;
+  if (busy && !force) return;
+  lastFetchAt = Date.now();
+  rpc('getPublicData', [state.playlistHash || '', visitor], function (data) {
+    if (force) setBusy(false);
+    loadedOnce = true;
+    loadFailed = false;
+    applyData(data || {});
+    if (openQueue) {
+      mode = 'queue';
+      scrollMine = true;
+      openQueue = false;
+    }
+    if (flash && flash.source === 'load') setFlash(null);
+    lastUpdated = new Date();
+    safePublish();
+  }, function (err) {
+    if (force) setBusy(false);
+    loadFailed = !loadedOnce;
+    openQueue = false;
+    setFlash('error', !loadedOnce || force ? errorText(err) : 'Couldn’t refresh. The list on screen may be a moment old.', 'load');
+    safePublish();
+  });
+}
+function mutate(name, args, after) {
+  if (busy) return;
+  setBusy(true);
+  setFlash(null);
+  safePublish();
+  rpc(name, args, function (res) {
+    try { if (after) after(res || {}); } catch (err) {}
+    load(true);
+  }, function (err) {
+    const text = errorText(err);
+    if (/too long/i.test(text)) {
+      setFlash('info', 'That took too long. Checking the latest list…', 'load');
+      setBusy(false);
+      safePublish();
+      load(true);
+      return;
+    }
+    setBusy(false);
+    setFlash('error', text, 'action');
+    safePublish();
+  });
+}
+function existsMessage(status) {
+  if (status === 'PLYD') return 'That song was already played tonight.';
+  if (status === 'PARK') return 'That song is on hold for this performance.';
+  return 'That song is already requested. Add your vote if you want to support it.';
+}
+function ask(song, artist) {
+  mutate('requestSong', [song, artist, '', visitor], function (res) {
+    if (res.ownerToken) store.set(ownerKey(res.id), res.ownerToken);
+    if (res.alreadyExists) setFlash('info', existsMessage(res.status), 'action');
+    else {
+      openQueue = true;
+      setFlash('info', 'Requested. The performer chooses when it is played.', 'action');
+    }
+  });
+}
+function vote(id) {
+  mutate('voteSong', [id, visitor], function (res) {
+    const voted = !!(res && res.voted);
+    recentVotes[id] = { voted: voted, until: Date.now() + 8000 };
+    store.set(voteKey(id), voted ? '1' : '0');
+    const row = state.requests.find(function (item) { return item.id === id; });
+    if (row) {
+      if (typeof row.voted === 'boolean' && row.voted !== voted) row.votes = Math.max(0, row.votes + (voted ? 1 : -1));
+      row.voted = voted;
+    }
+  });
+}
+function cancelRequest(request) {
+  if (busy) return;
+  if (!window.confirm('Cancel this song request?')) return;
+  mutate('cancelOwnRequest', [request.id, store.get(ownerKey(request.id)) || ''], function () {
+    setFlash('info', 'Request cancelled. Someone else can ask for it again.', 'action');
+  });
+}
+function bind() {
+  document.getElementById('tabSearch').addEventListener('click', function () { mode = 'search'; safePublish(); });
+  document.getElementById('tabQueue').addEventListener('click', function () { mode = 'queue'; safePublish(); });
+  const search = document.getElementById('search');
+  search.addEventListener('input', function () {
+    document.getElementById('clearSearch').hidden = !search.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(safePublish, 80);
+  });
+  document.getElementById('searchForm').addEventListener('submit', function (event) {
+    event.preventDefault();
+    clearTimeout(searchTimer);
+    safePublish();
+  });
+  document.getElementById('clearSearch').addEventListener('click', function () {
+    search.value = '';
+    search.focus();
+    clearTimeout(searchTimer);
+    safePublish();
+  });
+  document.getElementById('refresh').addEventListener('click', function () { if (!busy) load(false); });
+}
+function boot() {
+  bind();
+  if (!hasRpc()) {
+    loadFailed = true;
+    setFlash('error', 'This page has to be opened from the deployed /exec link.', 'load');
+    safePublish();
+    return;
+  }
+  load(false);
+  setInterval(function () {
+    if (document.hidden || busy) return;
+    if (Date.now() - lastFetchAt < 15000) return;
+    load(false);
+  }, 20000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && !busy && Date.now() - lastFetchAt > 5000) load(false);
+  });
+}
+boot();
+  </script>
+</body>
+</html>
